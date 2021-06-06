@@ -1,0 +1,874 @@
+---
+title: "Seoul Real Estate"
+author: "SongJihyun_2019313127"
+date: '2021 3 20 '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### 0.library & Set working directory
+
+```{r}
+## Install Library ## 
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+library(data.table)
+library(extrafont) 
+
+font_import()
+theme_set(theme_grey(base_family='NanumGothic'))
+
+## set wd ##
+setwd("/Users/songjh/desktop/Dataset")
+getwd()
+```
+
+### 1. 데이터 전처리 
+##### 1-1. 1st Dataset
+##### 1st Dataset (실거래가 데이터셋) 불러오기
+```{r, echo=FALSE}
+# 1st Dataset
+## get files
+single2020 <- fread("2020_단독다가구(매매)_실거래가.csv",
+              header = T,
+              encoding = "UTF-8")
+apart2020 <- fread("2020_아파트(매매)_실거래가.csv",
+              header = T,
+              encoding = "UTF-8")
+```
+
+
+```{r, echo=FALSE}
+#공시지가 
+gongsi2020 <- fread("공시지가2020.csv")
+gongsi2019 <- fread("공시지가2019.csv")
+gongsi2018 <- fread("공시지가2018.csv")
+gongsi2017 <- fread("공시지가2017.csv")
+gongsi <- rbind(gongsi2020,gongsi2019,gongsi2018,gongsi2017,fill=TRUE)
+gongsi <- gongsi[,!c("시도명","V13")]
+gongsi <- rename(gongsi,"공시지가"="공시지가(원/㎡)")
+gongsi <- as.data.frame(gongsi)
+gongsi <- gongsi %>% select('시군구명','기준년도','공시지가','시군구코드','법정동코드') %>%
+  filter(!is.na(공시지가))
+gongsi_avgpri <- gongsi %>% group_by(시군구명) %>%
+  summarise('평균공시지가'=mean(공시지가),'시군구코드'= 시군구코드) %>% unique() %>%
+  rename('행정구역'='시군구명')
+```
+
+
+```{r, echo=FALSE}
+#가로등 
+lights <- read.table("가로등.txt", sep="\t")
+names(lights)<- lights[1,] 
+lights <- lights[-(1:10),]
+lights[,1] <- lights[,1] %>% 
+  str_remove(pattern = ',') %>% as.numeric()
+lights <- lights[ ,c("가로등","구분")]
+names(lights)[names(lights) == "구분"] <- "행정구역"
+lights <- as.data.frame(lights)
+
+
+#cctv
+cctv <- read.csv("cctv.csv")
+cctv <- cctv %>% select("구분","총계") %>% rename("행정구역"="구분")
+cctv[,2] <- cctv[,2] %>% 
+  str_remove(pattern = ',') %>% as.numeric()
+names(cctv)[names(cctv) == "총계"] <- "cctv"
+cctv <- cctv[-1,]
+cctv[2,1] <- "중구"
+```
+
+
+```{r, echo=FALSE}
+#police
+police <- read.table("파출소소방서.txt", sep="\t")
+names(police)<- police[1,] 
+police<- police[-(1:2),]
+names(police)[names(police) == "자치구"] <- "행정구역"
+police <- as.data.frame(police)
+cols <- names(police)[3:8]
+police[cols] <- lapply(police[cols], as.numeric)
+police[is.na(police)] <- 0
+police <- police %>%  mutate ("경찰" = 경찰청*5 + 경찰서*3 + 지구대파출소치안센터, "소방" = 소방본부*5 + 소방서+`119안전센터`) %>% select('경찰','소방','행정구역')
+police
+
+#지하철
+subway <- read.csv("지하철역.csv")
+subway <- subway %>% select("X.3")
+noun <- "(서울시|서울특별시) ([^ ]+)"
+subway$X.3 <- str_extract(subway$X.3,pattern=noun)
+subway$X.3 <- str_replace(subway$X.3,"([^ ]+) ([^ ]+)", "\\2")
+subway <- subway %>% rename("행정구역"="X.3") %>% group_by(행정구역) %>% summarise(지하철역수=n())
+subway <- subway[1:25,]
+subway 
+
+
+#culture facitilites
+culture <- read.table("culture.txt", sep="\t")
+names(culture)<- culture[1,] 
+culture<- culture[-(1:2),(2:6)]
+names(culture)[names(culture) == "자치구"] <- "행정구역"
+cols <- names(culture)[2:5]
+culture[cols] <- lapply(culture[cols], as.numeric)
+culture <- culture %>% mutate("문화시설" = 문예회관 + 종합복지회관 + `구민(다목적)체육시설`+청소년수련시설)
+culture
+  
+```
+
+
+##### 변수 제거 
+*변수 관련하여 처리했습니다. 분석에 쓰이지 않을 변수를 제거했습니다.
+*총 4개의 데이터셋을 합치기 위해 변수를 처리했습니다. 
+- '분류' 변수를 추가했습니다. '분류'변수에는 주택유형에 해당하는 변수를 입력했습니다. 
+- 변수명을 수정했습니다. 단독다세대의 경우 '연면적'->'전용면적'으로 변수명을 바꿔주었습니다. 
+```{r}
+# 분석에 쓰이지 않을 변수 배제하기
+single2020 <-single2020 %>%
+  mutate("분류"=주택유형) %>% #분류추가
+  rename("전용면적(\u33a1)"="연면적(\u33a1)") %>% #변수 이름 재정의 
+  select("시군구","전용면적(\u33a1)","계약년월","계약일","거래금액(만원)","분류")
+apart2020 <- apart2020 %>%
+  mutate("분류" = "아파트") %>%
+  select("시군구","전용면적(\u33a1)","계약년월","계약일","거래금액(만원)","분류")
+
+```
+##### 세부 데이터 처리 
+*거래금액
+-'거래금액'으로 변수명 변환
+-숫자형 변수로 변환
+*시군구 
+-구에 해당하는 word 추출 
+```{r, echo=FALSE}
+house_price_2020 <- rbind(single2020,apart2020)  %>%
+  rename("거래금액"="거래금액(만원)")
+house_price_2020$거래금액 <- str_replace_all(house_price_2020$거래금액,",","")
+house_price_2020$거래금액 <- as.numeric(house_price_2020$거래금액)
+house_price_2020$시군구 <- str_replace(house_price_2020$시군구,"([^ ]+) ([^ ]+) ([^ ]+)", "\\2")
+house_price_2020 <- house_price_2020 %>% filter(분류 != "다가구")
+glimpse(house_price_2020)
+```
+
+#### 1-2. 2nd Dataset 
+##### (매입자연령대별 거래현황) 불러오기
+```{r}
+# 2nd Dataset
+age_apt<- fread("1920_(수정)매입자연령대별 아파트매매거래현황.csv",
+              header = T,
+              encoding = "UTF-8") 
+age_house<-fread("1920_매입자연령대별 주택매매거래현황(수정).csv",
+              header = T,
+              encoding = "UTF-8")
+```
+##### 변수 정제 
+*분석에 쓰이지 않을 변수를 제거했습니다.
+*총 2개의 데이터셋을 합치기 위해 변수를 처리했습니다. 
+- 변수명 통일; 매입자 연령대, 면적, 거래량 
+- 행 삭제; 부산시 상위 행만 선택(서울시데이터)
+- 변수 삭제; 변수 삭제함 
+- 값 수정; 전용면적 기본 단위가 천단위임, *1000 곱해줌
+- 값 수정; 잘못 입력된 값 삭제, 구별 데이터만 filter
+```{r}
+## 아파트 매매거래 현황
+age_apt <- age_apt %>% rename("매입자연령대"="매입자연령대별")  # 변수명 통일
+age_apt <- age_apt[1:min(which(age_apt$행정구역별 == "부산광역시"))-1,] # 서울시 지정
+age_apt <- age_apt %>% gather(계약년월, 거래량, contains("월")) %>% # 아파트 거래량 모으기 
+  select(-단위) %>% # 불필요한 변수 제거 
+  spread(항목, 거래량) %>% # 항목별로 볼 수 있도록 변경
+  rename("전용면적(\u33a1)"="면적[천㎡]","거래량"="호수[호수]") %>% # 변수명 통일
+  mutate("분류"= "아파트")
+age_apt$"전용면적(\u33a1)" <- age_apt[,4]*1000 # 데이터 단위 수정
+## 주택 매매거래 현황
+age_house <- age_house[1:min(which(age_house$행정구역별 == "부산광역시"))-1,] # 서울시 지정
+age_house <- age_house %>% gather(계약년월, 거래량, contains("월")) %>% # 월별로 보도록 수정 
+  select(-단위) %>% # 불필요한 변수 제거 
+  spread(항목, 거래량) %>% # 항목별로 볼 수 있도록 변경
+  rename("전용면적(\u33a1)"="면적[천\u33a1]","거래량"="동(호)수[동(호)수]") %>%  #변수명 통일 
+  mutate("분류"= "주택")
+age_house$"전용면적(\u33a1)" <- age_house[,4]*1000 # 데이터 단위 수정 
+
+house_price_age <- rbind(age_apt,age_house) #아파트 및 주택 매매거래 현황 합치기 
+
+house_price_age<- house_price_age %>% filter(매입자연령대 !="매입자연령대" & 행정구역별 != "전국" & 행정구역별 != "서울특별시") #매입자 연령대 확인 
+
+head(house_price_age)
+```
+```{r}
+for (i in 2:33){
+rank_data[,i] <- rank(-index_data[,i])
+}
+
+for (i in 1:25){
+ cat('"',index_data[i,1],'"'," = ",'"',index_data[i,1],'"')
+  
+}
+dataset
+```
+
+
+
+
+```{r}
+#서울시 주민등록 인구 노년층 비율
+pop2 <- read.table("1720_서울시_주민등록인구.txt", sep="\t")
+names(pop2)<- pop2[2,] 
+pop2 <- pop2[-(1:4),]
+pop2 <- pop2[,c(2,4,14,10)]
+names(pop2)[names(pop2) == "자치구"] <- "행정구역"
+names(pop2)[names(pop2) == "합계"] <- "거주인구"
+names(pop2)[names(pop2) == "65세이상고령자"] <- "고령자"
+pop2[,3] <- pop2[,3] %>% 
+  str_remove(pattern = ',') %>% as.numeric()
+pop2[,2] <- pop2[,2] %>% 
+  str_remove(pattern = ',') %>% as.numeric()
+pop2[,4] <- pop2[,4] %>% 
+  str_remove(pattern = ',') %>% as.numeric()
+pop2 <-  pop2 %>% mutate("고령자비율" = 고령자/거주인구, "외국인비율"= 등록외국인/거주인구)
+pop2
+
+```
+
+```{r}
+#지역내 총생산
+gdp <- read.table("생산.txt", sep="\t")
+names(gdp)<- gdp[1,] 
+gdp<- gdp[-(1:2),c(2,3,4,6)]
+names(gdp)[names(gdp) == "자치구"] <- "행정구역"
+cols <- names(gdp)[2:4]
+gdp[,2] <- gdp[,2] %>% 
+  str_remove_all(pattern = ',') %>% as.numeric()
+gdp[,3] <- gdp[,3] %>% 
+  str_remove_all(pattern = ',') %>% as.numeric()
+gdp[,4] <- gdp[,4] %>% 
+  str_remove_all(pattern = ',') %>% as.numeric()
+gdp
+```
+
+```{r}
+#park 
+park <- read.table("park.txt", sep="\t")
+names(park)<- park[2,] 
+park<- park[-c(1,2),-c(1,2,4,30)]
+cols <- names(park)[2:4]
+park <- park[1,] 
+park <- park %>% gather(행정구역,`면적`, contains("구")) %>% rename('공원' = '면적')
+park<- park[,-1]
+park[,2] <- park[,2] %>% 
+  str_remove_all(pattern = ',') %>% as.numeric()
+park
+
+```
+
+
+```{r}
+#hospital / drugstore
+library(readxl)
+hospital=as.data.frame(read_excel("병원.xlsx"))
+hospital <- hospital %>% filter (시도코드명=="서울") %>% select(시군구코드명) %>%
+  rename("행정구역"="시군구코드명" ) %>% group_by(행정구역) %>% summarise("병원" = n() )
+hospital 
+
+drug=as.data.frame(read_excel("약국.xlsx"))
+drug <- drug %>% filter (시도코드명=="서울") %>% select(시군구코드명) %>%
+  rename("행정구역"="시군구코드명" ) %>% group_by(행정구역) %>% summarise("약국" = n() )
+drug 
+drug
+```
+```{r}
+#food
+food = fread("휴게음식점.csv")
+noun <- "(서울시|서울특별시) ([^ ]+)"
+food$지번주소 <- str_extract(food$지번주소,pattern=noun)
+food$지번주소 <- str_replace(food$지번주소,"([^ ]+) ([^ ]+)", "\\2")
+food <- food%>% select(지번주소) %>%
+  rename("행정구역"="지번주소" ) %>% group_by(행정구역) %>% summarise("휴게음식점" = n() )
+food
+```
+
+
+```{r}
+#일인가구 비율 
+pop <- read.table("1719_서울시 가구원수별 가구수(구별) 통계.txt", sep="\t")
+names(pop)<- pop[2,] 
+pop <- pop[-(1:3),]
+pop <- pop[,2:4]
+names(pop)[names(pop) == "구분"] <- "행정구역"
+names(pop)[names(pop) == "1인"] <- "일인가구"
+
+pop$일인가구 <- pop$일인가구 %>% 
+  str_remove(pattern = ',') %>% as.numeric()
+pop$일반가구수 <- pop$일반가구수 %>% 
+  str_remove(pattern = ',') %>% as.numeric()
+
+pop <-  pop %>% mutate("일인가구비율" = 일인가구/일반가구수)
+pop
+```
+
+
+```{r}
+data1<- merge(pop,lights, key = '행정구역', all =FALSE)
+data2<- merge(pop2,subway, key = '행정구역', all =FALSE)
+data3<- merge(data1,data2, key = '행정구역', all =FALSE)
+data4<- merge(data3,culture, key= '행정구역')
+data5<- merge(data4,gdp, key= '행정구역')
+data6<- merge(data5,park, key='행정구역')
+data7<- merge(data6,hospital, key = '행정구역')
+data8<- merge(data7,drug,key='행정구역')
+data9<- merge(data8,food,key='행정구역')
+data10<- merge(data9,cctv,key='행정구역')
+final_data<- merge(data10,police, key = '행정구역', all =FALSE)
+
+
+
+```
+
+```{r}
+
+house_price_2020 %>% select(거래금액) %>% summary()
+house_price_mean <- house_price_2020 %>% group_by(시군구) %>% select(시군구, 거래금액)  %>%
+  summarise(거래금액 = mean(거래금액)) %>% rename('행정구역'='시군구')
+house_price_mean 
+
+trdvol_reg <- house_price_2020 %>% group_by(시군구) %>% count() %>% arrange(-n)  %>%
+  rename('행정구역'='시군구') %>% rename('거래량'='n')
+trdvol_reg
+
+final_data<- merge(final_data, house_price_mean, key = '행정구역', all =FALSE)
+final_data<- merge(final_data, trdvol_reg, key = '행정구역', all =FALSE) 
+final_data<- merge(final_data, gongsi_avgpri, key = '행정구역', all =FALSE) 
+```
+
+```{r}
+names(final_data)
+```
+```{r}
+##modeling
+##life 지수
+#final data 에서 life지수 변수만 추출하여 ㅣife 표 만들기
+life <- final_data%>% select(문화시설, 공원, 약국, 병원, 휴게음식점)
+pca_life <- prcomp(life, center = T, scale. = T)
+predict(pca_life)[,1]
+round(predict(pca_life),2)[,1]
+life_fin <- as.data.frame(final_data$행정구역) %>% rename("행정구역"= "final_data$행정구역" )
+life_fin[,2] <- as.data.frame(pca_life$x[,1] ) 
+names(life_fin)<- c("행정구역", "life" )
+
+
+normalize <- function(x) {
+  return((x-min(x))/(max(x)-min(x)))
+}
+
+life_fin[,2]<-normalize(life_fin[,2])
+
+
+```
+
+
+```{r}
+##교통지수
+trans <- final_data%>% select(지하철역수)
+pca_trans <- prcomp(trans, center = T, scale. = T)
+predict(pca_trans)[,1]
+round(predict(pca_trans),2)[,1]
+trans_fin <- as.data.frame(final_data$행정구역) %>% rename("행정구역"= "final_data$행정구역" )
+trans_fin[,2] <- as.data.frame(pca_trans$x[,1] ) 
+names(trans_fin)<- c("행정구역", "trans" )
+
+trans_fin[,2]<-normalize(trans_fin[,2])
+```
+```{r}
+##safety
+safety <- final_data%>% select(가로등, 경찰, 소방,cctv)
+pca_safety <- prcomp(safety, center = T, scale. = T)
+predict(pca_safety)[,1]
+round(predict(pca_safety),2)[,1]
+safety_fin <- as.data.frame(final_data$행정구역) %>% rename("행정구역"= "final_data$행정구역" )
+safety_fin[,2] <- as.data.frame(pca_safety$x[,1] ) 
+names(safety_fin)<- c("행정구역", "safety" )
+
+safety_fin[,2]<-normalize(safety_fin[,2])
+```
+```{r}
+index_data <- merge(final_data,safety_fin,key='행정구역')
+index_data <- merge(index_data,life_fin,key='행정구역')
+index_data <- merge(index_data,trans_fin,key='행정구역')
+index_data <- index_data %>% rename("id"="시군구코드" )
+
+id <- index_data%>%dplyr::select(행정구역,id)
+
+rank_data<- as.data.frame(matrix(,25,33))
+names(rank_data) <- names(index_data)
+rank_data[,1] <- index_data[,1]
+for (i in 2:33){
+rank_data[,i] <- rank(-index_data[,i])
+}
+rank_data
+```
+```{r}
+index_data
+```
+```{r}
+plot(safety)
+```
+
+
+```{r}
+plot(life)
+```
+
+
+```{r}
+plot(trans)
+```
+
+```{r}
+plot(index_data %>% select(safety,life,trans,거래금액,`1인당 지역내총생산`))
+```
+
+
+```{r}
+#register API
+library(ggmap)
+library(ggplot2)
+library(raster)
+library(rgeos)
+library(maptools)
+library(rgdal)
+register_google(key = "[AIzaSyDtz590-TgMPzcUnieSG5b9r-65ZL2vrq8]") # temporary basis
+
+
+korea <- shapefile('TL_SCCO_SIG.shp') %>% 
+  spTransform(CRSobj = CRS('+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'))
+new_map <- fortify(korea, region = 'SIG_CD')
+new_map$id <- as.numeric(new_map$id)
+seoul_map <- new_map[new_map$id <= 11740,]
+# Merge two dataframes
+df <- merge(seoul_map,index_data, by = "id")
+
+```
+
+
+
+##주택관련 시각화
+*서울시 자치구 조회
+```{r}
+house_price_2020 %>% select(시군구) %>% 
+  unique()
+```
+
+
+#행정구역별 매매거래 건수 시각화
+```{r}
+trdvol_reg <- house_price_2020 %>% group_by(시군구) %>% count() %>% arrange(-n)
+trdvol_reg
+```
+
+
+```{r}
+ggplot(trdvol_reg, aes(x=시군구, y=n)) + 
+  geom_bar(stat="identity") +
+  scale_fill_brewer(palette="Oranges") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+```
+```{r}
+head(trdvol_reg)
+```
+```{r}
+plot1 <- trdvol_reg %>% rename('행정구역'='시군구')
+plot1 <- merge(trdvol_reg,index_data,key='행정구역')
+plot1 <- plot1 %>% dplyr::select(행정구역, n, id)
+plot1 <- merge(seoul_map,plot1, by = "id")
+
+
+ggplot() +
+   geom_polygon(data = plot1, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = n), 
+                   color = "white") 
+```
+
+```{r}
+trd_vol_type <- house_price_2020 %>% group_by(시군구,분류) %>% count() %>% rename("거래량"="n")
+ggplot(trd_vol_type, aes(x = 시군구, y = 거래량, fill=분류,label = 분류)) +  
+  geom_bar(stat = "identity")+theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+```
+
+
+```{r}
+type5 <- house_price_2020 %>% group_by(시군구,분류) %>% count() 
+type5 %>% group_by (분류) %>% summarise(평균 = mean(n), 중위값 = median(n))
+```
+
+
+*월별 거래량 조회
+```{r}
+#월별 거래량 분석 
+house_price_2020 %>% dplyr::select(계약년월, 거래금액, 분류) %>% 
+  group_by(계약년월) %>%
+  summarise(거래금액= mean(거래금액))
+```
+
+
+#행정구역별 공시지가 시각화
+
+```{r}
+plot1<-gongsi_avgpri%>% dplyr::select(행정구역, 평균공시지가) %>% arrange(n)
+ggplot(plot1, aes(x=행정구역, y=평균공시지가)) + 
+  geom_bar(stat="identity") +
+  scale_fill_brewer(palette="Oranges") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+```
+```{r}
+plot31 <- gongsi%>% group_by(시군구명, 기준년도) %>% summarise("평균공시지가" = mean(공시지가)) %>% filter(기준년도 != "1905.7.10")
+ggplot(plot31, aes(x = 기준년도, y = 평균공시지가, group = 시군구명,colour=시군구명)) +
+  geom_line()
+
+```
+
+```{r}
+plot2 <- gongsi %>% rename('행정구역'='시군구명')
+plot2 <- merge(gongsi,index_data,key='행정구역')
+plot2 <- plot1 %>% dplyr::select(행정구역, n, id)
+plot2 <- merge(seoul_map,plot1, by = "id")
+
+
+ggplot() +
+   geom_polygon(data = plot2, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = n), 
+                   color = "white") 
+
+```
+
+
+
+*지역별 매매가격 조회 
+```{r}
+house_price_2020 %>% group_by(시군구) %>% dplyr::select(시군구, 거래금액)  %>%
+  summarise(거래금액 = mean(거래금액)) %>% 
+  arrange(-거래금액)
+```
+
+```{r}
+price_reg<-house_price_2020 %>% group_by(시군구) %>% summarise(거래금액)
+ggplot(price_reg, aes(x=거래금액)) +
+  geom_histogram()
+```
+
+```{r}
+# 1분위수 계산
+Q1 = quantile(price_reg$거래금액,probs= c(0.25),na.rm = TRUE) 
+# 3분위수 계산
+Q3 = quantile(price_reg$거래금액,probs = c(0.75),na.rm = TRUE)
+
+LC = Q1 - 1.5 * (Q3 - Q1) # 아래 울타리
+UC = Q3 + 1.5 * (Q3 - Q1) # 위 울타리
+
+price_reg2 = subset(price_reg,
+               거래금액>  LC & 거래금액 < UC)
+ggplot(price_reg2, aes(x=시군구,y=거래금액)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+```
+
+```{r}
+price_reg_average_median <- price_reg %>%
+  summarise(average=mean(거래금액),median=median(거래금액))
+price_reg_average_median
+```
+
+
+```{r}
+ggg2 <- ggplot(price_reg_average_median) +
+  geom_point(aes(시군구,median)) + 
+  geom_point(aes(시군구,y=average),color="red")
+ggg2
+```
+
+
+```{r}
+price_type <- house_price_2020 %>% dplyr::select(시군구, 분류, 거래금액) %>% 
+  group_by(분류) 
+
+# 1분위수 계산
+Q1 = quantile(price_type$거래금액,probs= c(0.25),na.rm = TRUE) 
+# 3분위수 계산
+Q3 = quantile(price_type$거래금액,probs = c(0.75),na.rm = TRUE)
+
+LC = Q1 - 1.5 * (Q3 - Q1) # 아래 울타리
+UC = Q3 + 1.5 * (Q3 - Q1) # 위 울타리
+
+price_reg2 = subset(price_type,
+               거래금액>  LC & 거래금액 < UC)
+ggplot(price_reg2, aes(x=시군구,y=거래금액)) +
+  geom_boxplot()
+
+
+```
+
+```{r}
+
+plot2 <- gongsi %>% rename('행정구역'='시군구명')
+plot2 <- merge(gongsi,index_data,key='행정구역')
+plot2 <- plot1 %>% dplyr::select(행정구역, n, id)
+plot2 <- merge(seoul_map,plot1, by = "id")
+
+ggplot() +
+   geom_polygon(data = plot1, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = n), 
+                   color = "white") 
+```
+
+```{r}
+summary(house_price_2020$거래금액)
+```
+
+
+#행정구역별 공시가격 추이 
+```{r}
+gongsi
+```
+
+
+
+
+#인구관련 시각화
+#고령층 비율 시각화
+```{r}
+pop2 %>% select(행정구역, 고령자비율) %>% arrange(고령자비율)
+```
+
+```{r}
+plot51 <- merge(id, pop2, key='행정구역')
+plot51<- plot51 %>% dplyr::select(행정구역, 고령자비율, id)
+plot51 <- merge(seoul_map,plot51, by = "id")
+
+ggplot() +
+   geom_polygon(data = plot51, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = 고령자비율), 
+                   color = "white") 
+
+```
+
+#외국인 비율 시각화
+```{r}
+pop2%>% select(행정구역, 외국인비율) %>% arrange(-외국인비율)
+```
+
+```{r}
+plot52 <- merge(id, pop2, key='행정구역')
+plot52<- plot52 %>% dplyr::select(행정구역, 외국인비율, id)
+plot52 <- merge(seoul_map,plot52, by = "id")
+
+ggplot() +
+   geom_polygon(data = plot52, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = 외국인비율), 
+                   color = "white") 
+
+```
+
+#인구수 시각화
+```{r}
+plot53 <- merge(id, pop2, key='행정구역')
+plot53<- plot53 %>% dplyr::select(행정구역,거주인구, id)
+plot53 <- merge(seoul_map,plot53, by = "id")
+
+
+ggplot(plot53, aes(x=행정구역, y=거주인구)) + 
+  geom_bar(stat="identity") +
+  scale_fill_brewer(palette="Oranges") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+```
+
+
+```{r}
+plot5 <- merge(id, pop2, key='행정구역')
+plot5<- plot5 %>% dplyr::select(행정구역, 거주인구, id)
+plot5 <- merge(seoul_map,plot5, by = "id")
+
+ggplot() +
+   geom_polygon(data = plot5, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = 거주인구), 
+                   color = "white") 
+
+```
+
+```{r}
+pop2%>%select(행정구역, 거주인구)%>% arrange(-거주인구)
+```
+
+
+
+```{r}
+ggplot() +
+   geom_polygon(data = plot53, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = 거주인구), 
+                   color = "white") 
+
+```
+
+
+#1인가구 비율 시각화
+```{r}
+plot54 <- merge(id, pop, key='행정구역')
+plot54<- plot54 %>% dplyr::select(행정구역, 일인가구비율, id)
+plot54 <- merge(seoul_map,plot54, by = "id")
+
+ggplot() +
+   geom_polygon(data = plot54, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = 일인가구비율), 
+                   color = "white") 
+
+```
+
+
+```{r}
+pop %>% select(행정구역, 일인가구비율) %>% arrange(-일인가구비율)
+```
+
+
+```
+
+
+```{r}
+#Safety 지수
+#Life 지수
+#Trans 지수
+```
+
+```{r}
+index_data %>% dplyr::select(행정구역,safety) %>% arrange(desc(safety))
+```
+
+```{r}
+ggplot() +
+   geom_polygon(data = df, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = safety), 
+                   color = "white")
+```
+```{r}
+index_data %>% dplyr::select(행정구역,life) %>% arrange(desc(life))
+```
+
+```{r}
+ggplot() +
+   geom_polygon(data = df, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = life), 
+                   color = "white")
+```
+
+```{r}
+index_data %>% dplyr::select(행정구역,trans) %>% arrange(desc(trans))
+```
+
+```{r}
+ggplot() +
+   geom_polygon(data = df, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group, 
+                   fill = trans), 
+                   color = "white") 
+
+
+```
+
+
+```{r}
+house_price_2020%>% summary()
+```
+
+
+```{r}
+
+#multiple Regression
+#공시지가, 각 지수, 고령층 지수, 외국인 지수, 1인가구 지수, 인구수 지수 함수 정의
+
+
+index_data$`1인당 지역내총생산`<-normalize(index_data$`1인당 지역내총생산`)
+semimulti<- index_data%>%dplyr::select('행정구역','평균공시지가','1인당 지역내총생산','safety','life','trans','외국인비율','고령자비율','일인가구비율')
+
+multi <- semimulti
+multi[,3] <- log(multi[,3])
+multi[,4] <- log(multi[,4])
+multi[,5] <- log(multi[,6])
+multi[,6] <- log(multi[,6])
+multi[,7] <- log(multi[,7])
+multi[,8] <- log(multi[,8])
+df <- multi 
+is.na(df)<-sapply(df, is.infinite)
+df[is.na(df)]<-0
+multi <- df
+
+
+model1 <- lm(평균공시지가~safety+life+trans+`1인당 지역내총생산`+외국인비율+고령자비율+일인가구비율, data = multi)
+
+predict(model1)
+summary(model1)
+
+model11 <- step(model1, direction="both")
+summary(model11)
+
+model3 <- lm(평균공시지가 ~ safety+life+trans)
+
+multi2 <- index_data%>%dplyr::select('거래금액','safety','life','trans','외국인비율','고령자비율','일인가구비율')
+
+multi2[,3] <- log(multi2[,3])
+multi2[,4] <- log(multi2[,4])
+multi2[,5] <- log(multi2[,6])
+multi2[,6] <- log(multi2[,6])
+multi2[,7] <- log(multi2[,7])
+df <- multi2 
+is.na(df)<-sapply(df, is.infinite)
+df[is.na(df)]<-0
+multi2 <- df
+
+
+model2 <- lm(거래금액~safety+life+trans+외국인비율+고령자비율+일인가구비율, data = multi2)
+predict(model2)
+summary(model2)
+
+saveRDS(index_data, file="/Users/songjh/Desktop/Dataset/shiny/index_data.rds")
+
+
+```
+
+
+```{r}
+
+ 
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
