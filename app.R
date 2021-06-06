@@ -15,10 +15,7 @@ library(tidyverse)
 library(plotly)
 
 
-getwd()
-setwd("/Users/songjh/Desktop/Dataset")
-
-dataset <- readRDS("/Users/songjh/Desktop/Dataset/shiny/index_data.rds")
+dataset <- readRDS("index_data.rds")
 #chracter <- us_contagious_chracters
 #chracter <- mutate(chracter, percapita = count/(population/100000)) %>% 
 #  pivot_longer(cols = c(count, percapita), 
